@@ -1,0 +1,55 @@
+name: Multi Stream Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      SOURCE_LINKS:
+        description: 'روابط البث (مفرقة بالفاصلة)'
+        required: true
+        type: string
+      FB_STREAM_KEYS:
+        description: 'مفاتيح فيسبوك (مفرقة بالفاصلة)'
+        required: true
+        type: string
+
+jobs:
+  multi-stream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Launch Parallel Live Streams
+        run: |
+          IFS=',' read -ra LINKS <<< "${{ github.event.inputs.SOURCE_LINKS }}"
+          IFS=',' read -ra KEYS <<< "${{ github.event.inputs.FB_STREAM_KEYS }}"
+
+          for i in "${!LINKS[@]}"; do
+            LINK="${LINKS[$i]}"
+            KEY="${KEYS[$i]}"
+            
+            # حيد الفراغات الزائدة
+            LINK=$(echo "$LINK" | xargs)
+            KEY=$(echo "$KEY" | xargs)
+
+            if [ -n "$LINK" ] && [ -n "$KEY" ]; then
+              echo "Starting Stream $((i+1)) -> $LINK"
+              (
+                while true; do
+                  ffmpeg -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
+                  -i "$LINK" \
+                  -c copy \
+                  -f flv "rtmps://live-api-s.facebook.com:443/rtmp/$KEY"
+                  
+                  echo "Stream $((i+1)) disconnected, retrying in 3 seconds..."
+                  sleep 3
+                done
+              ) &
+            fi
+          done
+
+          # البقاء شغال لحين انتهاء الوقت المحدد للـ Action
+          wait
+          
