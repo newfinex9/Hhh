@@ -1,3 +1,3 @@
-run: |
+run: 
   python extract.py
 
