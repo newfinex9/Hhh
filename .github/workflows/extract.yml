@@ -1,0 +1,16 @@
+name: Multi Stream Engine
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [trigger_extraction]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # ضع باقي خطوات السكربت الخاصة بك هنا (Python script execution)
+      
