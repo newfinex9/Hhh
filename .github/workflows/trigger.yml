@@ -1,0 +1,31 @@
+name: Trigger Extraction
+
+on:
+  repository_dispatch:
+    types: [trigger_extraction]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show received data
+        env:
+          SOURCE: ${{ github.event.client_payload.source }}
+          PAGE_ID: ${{ github.event.client_payload.page_id }}
+          COUNT: ${{ github.event.client_payload.count }}
+        run: |
+          echo "Workflow started successfully"
+          echo "Source: $SOURCE"
+          echo "Page ID: $PAGE_ID"
+          echo "Count: $COUNT"
+
+      - name: Send Telegram status
+        env:
+          BOT_TOKEN: ${{ github.event.client_payload.bot_token }}
+          CHAT_ID: ${{ github.event.client_payload.chat_id }}
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${CHAT_ID}" \
+            --data-urlencode "text=✅ GitHub Actions خدام بنجاح. تم استقبال الطلب ومعالجته بشكل آمن."
