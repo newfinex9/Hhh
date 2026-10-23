@@ -1,0 +1,149 @@
+name: 🚀 FB Auto-Relay Multi-Stream
+
+on:
+  workflow_dispatch:
+    inputs:
+      SOURCE_LINKS:
+        description: 'روابط البث - فرق بينهم بـ ,'
+        required: true
+
+      FB_STREAM_KEYS:
+        description: 'مفاتيح البث - فرق بينهم بـ ,'
+        required: true
+
+      WATERMARK_TEXT:
+        description: 'نص العلامة المائية'
+        required: true
+        default: 'CHAFIK GHADDAR TV'
+
+      START_TIME:
+        description: 'وقت بداية البث بتوقيت UTC (مثال: 22:00:00 أو 2026-09-28 22:00:00)'
+        required: false
+        default: ''
+
+# صلاحيات ضرورية للـ GITHUB_TOKEN باش يقدر يعاود يطلق الـ Workflow راسه
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  multi-broadcast:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: ⚡ Install FFmpeg & GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: 🚀 Process Schedule & Smart Relay
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=============================================="
+          echo "🚀 CHAFIK TV - SELF-RETRIGGERING SYSTEM"
+          echo "=============================================="
+          START_TIME="${{ github.event.inputs.START_TIME }}"
+          if [ -n "$START_TIME" ]; then
+            # إضافة تاريخ اليوم أوتوماتيكياً إذا تم إدخال الساعة فقط
+            if [[ "$START_TIME" =~ ^[0-9]{2}:[0-9]{2}(:[0-9]{2})?$ ]]; then
+              TODAY=$(date -u +%Y-%m-%d)
+              START_TIME="$TODAY $START_TIME"
+            fi
+            TARGET_EPOCH=$(date -u -d "$START_TIME" +%s 2>/dev/null || echo "")
+            CURRENT_EPOCH=$(date -u +%s)
+            if [ -z "$TARGET_EPOCH" ]; then
+              echo "❌ صيغة الوقت غير صحيحة!"
+              exit 1
+            fi
+            WAIT_SECONDS=$((TARGET_EPOCH - CURRENT_EPOCH))
+            MAX_SLEEP=18000 # 5 ساعات بالثواني (أقل من حد GitHub البالغ 6 ساعات)
+            # إذا كان الوقت المتبقي أكبر من 5 ساعات
+            if [ $WAIT_SECONDS -gt $MAX_SLEEP ]; then
+              echo "⏳ الوقت المتبقي ($((WAIT_SECONDS/3600)) ساعة) يتجاوز حد الجلسة الواحدة."
+              echo "💤 سيتم الانتظار لمدة 5 ساعات، ثم إعادة تشغيل المهمة تلقائياً..."
+              
+              sleep $MAX_SLEEP
+              echo "🔄 جاري تسليم المهمة لـ Workflow جديد..."
+              gh workflow run "${GITHUB_WORKFLOW}" \
+                -f SOURCE_LINKS="${{ github.event.inputs.SOURCE_LINKS }}" \
+                -f FB_STREAM_KEYS="${{ github.event.inputs.FB_STREAM_KEYS }}" \
+                -f WATERMARK_TEXT="${{ github.event.inputs.WATERMARK_TEXT }}" \
+                -f START_TIME="${{ github.event.inputs.START_TIME }}"
+              
+              echo "✅ تم إطلاق المهمة القادمة بنجاح. إنهاء الجلسة الحالية."
+              exit 0
+            
+            # إذا كان الوقت المتبقي أقل من 5 ساعات وأكبر من 0
+            elif [ $WAIT_SECONDS -gt 0 ]; then
+              WAIT_MINUTES=$((WAIT_SECONDS / 60))
+              echo "⏳ باقي $WAIT_SECONDS ثانية (حوالي $WAIT_MINUTES دقيقة) حتى يبدأ البث..."
+              echo "💤 جاري الانتظار النهائى..."
+              sleep $WAIT_SECONDS
+              echo "⏰ وصل الوقت المحدد! جاري إطلاق البث الان..."
+            else
+              echo "⚠️ الوقت المحدد قد مر، سيتم إطلاق البث فوراً."
+            fi
+          fi
+          # --- بدء عملية البث عبر FFmpeg ---
+          IFS=',' read -ra SOURCES <<< "${{ github.event.inputs.SOURCE_LINKS }}"
+          IFS=',' read -ra KEYS <<< "${{ github.event.inputs.FB_STREAM_KEYS }}"
+          COUNT_SOURCES=${#SOURCES[@]}
+          COUNT_KEYS=${#KEYS[@]}
+          if [ "$COUNT_SOURCES" -ne "$COUNT_KEYS" ]; then
+            echo "❌ عدد الروابط لا يطابق عدد المفاتيح!"
+            exit 1
+          fi
+          PIDs=()
+          for (( i=0; i<$COUNT_SOURCES; i++ ))
+          do
+            SOURCE=$(echo "${SOURCES[$i]}" | xargs)
+            KEY=$(echo "${KEYS[$i]}" | xargs)
+            echo "▶️ Launch Stream $((i+1))"
+            ffmpeg \
+              -hide_banner \
+              -loglevel error \
+              -reconnect 1 \
+              -reconnect_streamed 1 \
+              -reconnect_delay_max 10 \
+              -thread_queue_size 4096 \
+              -i "$SOURCE" \
+              -vf "drawtext=text='${{ github.event.inputs.WATERMARK_TEXT }}':fontcolor=white:fontsize=36:borderw=2:bordercolor=black:box=1:boxcolor=black@0.4:x=w-mod(t*100\,w+tw):y=h-th-25" \
+              -map 0:v:0 \
+              -map 0:a? \
+              -c:v libx264 \
+              -preset veryfast \
+              -tune zerolatency \
+              -pix_fmt yuv420p \
+              -profile:v main \
+              -r 30 \
+              -g 60 \
+              -keyint_min 60 \
+              -sc_threshold 0 \
+              -b:v 2500k \
+              -maxrate 2500k \
+              -bufsize 5000k \
+              -c:a aac \
+              -b:a 128k \
+              -ar 44100 \
+              -f flv \
+              "rtmps://live-api-s.facebook.com:443/rtmp/$KEY" > stream_$i.log 2>&1 &
+            PIDs+=($!)
+            echo "✅ Stream $((i+1)) Started"
+          done
+          echo "=============================================="
+          echo "🔥 ALL STREAMS RUNNING"
+          echo "=============================================="
+          while true; do
+            ALIVE=0
+            for pid in "${PIDs[@]}"; do
+              if kill -0 "$pid" 2>/dev/null; then
+                ALIVE=$((ALIVE + 1))
+              fi
+            done
+            if [ $ALIVE -eq 0 ]; then
+              echo "❌ توقفت جميع عمليات البث!"
+              exit 1
+            fi
+            sleep 30
+          done
